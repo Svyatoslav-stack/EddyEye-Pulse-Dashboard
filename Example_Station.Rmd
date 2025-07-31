@@ -293,7 +293,7 @@ p2
 
 ### <span style="font-weight: bold; color: black;">CH~4~ Wet and Dry Mole Fraction Dynamics</span>
 
-```{r Example Station CH4 Wet and Dry Mole Fractions, dpi=600}
+```{r Example Station CH4 Wet and Dry Mole Fractions,fig.height=5, fig.width=7, dpi=600}
 
 p3 = ggplot(data = hf_day, aes(x = TIMESTAMP)) +
   geom_scattermore(aes(y = CH4_wet), pointsize = 1, color = "#276FBF") +
@@ -322,7 +322,7 @@ p3
 
 ### <span style="font-weight: bold; color: black;">N~2~O Wet and Dry Mole Fraction Dynamics</span>
 
-```{r Example Station N2O Wet and Dry Mole Fractions, dpi=600}
+```{r Example Station N2O Wet and Dry Mole Fractions,fig.height=5, fig.width=7, dpi=600}
 
 p4 = ggplot(data = hf_day, aes(x = TIMESTAMP)) +
   geom_scattermore(aes(y = N2O_wet), pointsize = 1, color = "#276FBF") +
