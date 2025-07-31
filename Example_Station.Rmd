@@ -1,0 +1,428 @@
+---
+title: "EddyEye Pulse"
+output:
+  flexdashboard::flex_dashboard:
+    navbar:
+      - { icon: "ion-pin", title: "EddyEye Hub", href: "https://github.com/Svyatoslav-stack/Eddy-Covariance-Data-Dashboards", align: right }
+    theme: united
+    orientation: rows
+    vertical_layout: scroll
+    smooth_scroll: TRUE
+    css: css/styles.css
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(error = TRUE)
+
+library(ggplot2)
+library(dplyr)
+library(flexdashboard)
+library(scattermore)
+library(pandoc)
+library(reticulate)
+library(lubridate)
+library(scales)
+library(knitr)
+library(kableExtra)
+library(DBI)
+library(odbc)
+library(glue)
+library(yaml)
+
+```
+
+# Example Station
+
+```{r Example Station HF data handling, include=FALSE}
+
+cfg <- yaml::read_yaml("Your/path/to/file/config.yaml")
+db_cfg   <- cfg$db
+path_cfg <- cfg$paths
+table_hf <- cfg$tables$hf
+cols_hf  <- cfg$columns$hf_pulse
+
+con <- dbConnect(
+  odbc(),
+  .connection_string = glue(
+    "Driver={db_cfg$driver};",
+    "Server={db_cfg$server};",
+    "Database={db_cfg$database};",
+    "UID={db_cfg$uid};",
+    "PWD={db_cfg$pwd};",
+    "TrustServerCertificate={db_cfg$trust_cert}"
+  ),
+  timeout = 10
+)
+
+res          <- dbGetQuery(con, glue(
+  "SELECT MAX(TmStamp) AS last_ts FROM {table_hf};"
+))
+last_ts_utc  <- as.POSIXct(res$last_ts[1],
+                           format = "%Y-%m-%d %H:%M:%S",
+                           tz     = "UTC")
+
+period_end_utc   <- floor_date(last_ts_utc, unit = "30 minutes")
+period_start_utc <- period_end_utc - minutes(30)
+
+is_summer <- dst(with_tz(last_ts_utc, "Europe/Tallinn"))
+
+day_start_utc <- floor_date(last_ts_utc, unit = "day") -
+  hours(ifelse(is_summer, 3, 2))
+day_end_utc   <- period_end_utc
+
+fmt <- "%Y-%m-%d %H:%M:%S"
+ps  <- format(period_start_utc, fmt, tz = "UTC")
+pe  <- format(period_end_utc,   fmt, tz = "UTC")
+ds  <- format(day_start_utc,    fmt, tz = "UTC")
+de  <- format(day_end_utc,      fmt, tz = "UTC")
+
+hf_half_utc <- dbGetQuery(con, glue("
+  SELECT {paste(cols_hf, collapse = ', ')}
+    FROM {table_hf}
+   WHERE TmStamp >= '{ps}'
+     AND TmStamp <  '{pe}';
+"))
+
+hf_day_utc <- dbGetQuery(con, glue("
+  SELECT {paste(cols_hf, collapse = ', ')}
+    FROM {table_hf}
+   WHERE TmStamp >= '{ds}'
+     AND TmStamp <  '{de}';
+"))
+
+dbDisconnect(con)
+
+add_dst_hour <- function(ts_utc) {
+  local_ts <- with_tz(ts_utc, "Europe/Tallinn")
+  ts_utc + hours(ifelse(dst(local_ts), 3, 2))
+}
+
+hf_halfhour <- hf_half_utc %>%
+  rename(TIMESTAMP = TmStamp) %>%
+  mutate(
+    TIMESTAMP = {
+      ts0 <- as.POSIXct(TIMESTAMP,
+                        format = "%Y-%m-%d %H:%M:%S",
+                        tz     = "UTC")
+      add_dst_hour(ts0)
+    }
+  )
+
+hf_day <- hf_day_utc %>%
+  rename(TIMESTAMP = TmStamp) %>%
+  mutate(
+    TIMESTAMP = {
+      ts0 <- as.POSIXct(TIMESTAMP,
+                        format = "%Y-%m-%d %H:%M:%S",
+                        tz     = "UTC")
+      add_dst_hour(ts0)
+    }
+  )
+
+```
+
+```{r Example Station alarm section, include=FALSE}
+
+process_alarm <- function(data, row_threshold, value_threshold, folder_general, folder_oneobs) {
+  total_missing_rows <- row_threshold - nrow(data)
+  total_na_per_column <- sapply(data, function(col) sum(is.na(col)))
+  good_values_per_column <- sapply(total_na_per_column, function(na_count) row_threshold - na_count - total_missing_rows)
+  
+  alarming_columns_by_missing <- names(data)[good_values_per_column < 16000]
+  if (length(alarming_columns_by_missing) > 0) {
+    missing_alarm_file_path <- file.path(folder_general, paste0("alarm_", format(Sys.time(), "%d.%m.%Y %H.%M.%S"), ".txt"))
+    file.create(missing_alarm_file_path)
+    alarming_details <- sapply(alarming_columns_by_missing, function(col) paste0(col, ": ", good_values_per_column[col], " observations"))
+    writeLines(alarming_details, missing_alarm_file_path)
+  }
+  
+  alarming_columns_by_value <- names(data)[sapply(names(data), function(col) any(table(data[[col]]) > value_threshold))]
+  if (length(alarming_columns_by_value) > 0) {
+    value_alarm_file_path <- file.path(folder_oneobs, paste0("alarm_", format(Sys.time(), "%d.%m.%Y %H.%M.%S"), ".txt"))
+    file.create(value_alarm_file_path)
+    alarming_details_by_value <- sapply(alarming_columns_by_value, function(col) paste0(col, ": ", good_values_per_column[col], " observations"))
+    writeLines(alarming_details_by_value, value_alarm_file_path)
+  }
+}
+
+process_alarm(
+  data = hf_halfhour,
+  row_threshold = 18000,
+  value_threshold = 9000,
+  folder_general = path_cfg$alarm_folder_general,
+  folder_oneobs = path_cfg$alarm_folder_oneobs
+)
+
+```
+
+```{r Example Station time parameters calculations, include=FALSE}
+
+last_updated <- format(Sys.time(), "%d %B %Y, %H:%M")
+
+if (nrow(hf_day) > 0) {
+  last_dataset_timestamp <- hf_day %>%
+    summarise(last_timestamp = max(TIMESTAMP, na.rm = TRUE)) %>%
+    pull(last_timestamp)
+  
+  if (is.na(last_dataset_timestamp)) {
+    station_time <- NA
+  } else {
+    station_time <- format(last_dataset_timestamp, "%d %B %Y, %H:%M")
+  }
+} else {
+  station_time <- NA
+}
+
+```
+
+## Row
+
+### <span style="font-weight: bold; color: black;">Time Parameters</span>
+
+```{r Example Station time parameters (visualisation), echo=FALSE}
+
+data <- data.frame(
+  Parameter = c("Dashboard Refreshed", "Last Observation Time"),
+  Value = c(last_updated, station_time)
+)
+
+data %>%
+  kable(format = "html", align = "c", col.names = NULL) %>%
+  kable_styling(position = "center", full_width = TRUE, bootstrap_options = "striped")
+
+```
+
+## Row
+
+### <span style="font-weight: bold; color: black;">Number of Observations in the Last 30 Minutes</span>
+
+```{r Example Station last 30 min observations, echo=FALSE}
+
+ideal_total <- 18000
+num_rows <- nrow(hf_halfhour)
+
+data_count <- data.frame(
+  Parameter = c("CO~2~ Wet Mole Fraction",
+                "CO~2~ Dry Mole Fraction",
+                "H~2~O Mole Fraction", 
+                "CH~4~ Wet Mole Fraction",
+                "CH~4~ Dry Mole Fraction",
+                "N~2~O Wet Mole Fraction",
+                "N~2~O Dry Mole Fraction",
+                "Wind Speed X", 
+                "Wind Speed Y",
+                "Wind Speed Z",
+                "Wind Temperature"),
+  Present = c(
+    sum(!is.na(hf_halfhour$CO2_wet)),
+    sum(!is.na(hf_halfhour$CO2_dry)),
+    sum(!is.na(hf_halfhour$H2O)),
+    sum(!is.na(hf_halfhour$CH4_wet)),
+    sum(!is.na(hf_halfhour$CH4_dry)),
+    sum(!is.na(hf_halfhour$N2O_wet)),
+    sum(!is.na(hf_halfhour$N2O_dry)),
+    sum(!is.na(hf_halfhour$WindSpeed_X)),
+    sum(!is.na(hf_halfhour$WindSpeed_Y)),
+    sum(!is.na(hf_halfhour$WindSpeed_Z)),
+    sum(!is.na(hf_halfhour$Wind_Temp))
+  )
+) %>%
+  mutate(
+    `Present (%)` = round((Present / ideal_total) * 100, 1),
+    Missing = ideal_total - Present,
+    `Missing (%)` = round((Missing / ideal_total) * 100, 1)
+  )
+
+data_count %>%
+  kable(format = "html", align = "c",
+        col.names = c("Parameter", "Present (Obs)", "Present (%)", "Missing (Obs)", "Missing (%)")) %>%
+  kable_styling(position = "center", full_width = TRUE, bootstrap_options = "striped")
+
+
+```
+
+## Row
+
+### <span style="font-weight: bold; color: black;">CO~2~ Wet and Dry Mole Fraction Dynamics</span>
+
+```{r Example Station CO2 Wet and Dry Mole Fractions plot, fig.height=5, fig.width=7, dpi=600}
+
+p1 = ggplot(data = hf_day, aes(x = TIMESTAMP)) +
+  geom_scattermore(aes(y = CO2_wet), pointsize = 1, color = "#276FBF") +
+  geom_scattermore(aes(y = CO2_dry), pointsize = 1, color = "maroon") +
+  scale_y_continuous(
+    name = expression(CO[2]~wet),
+    sec.axis = sec_axis(trans = ~ ., name = expression(CO[2]~dry))
+  ) +
+  scale_x_datetime(date_breaks = "1 hours", date_labels = "%H:%M") +
+  labs(title = NULL, x = NULL) +
+  theme_light() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title.y.left = element_text(color = "#276FBF"),
+    axis.text.y.left = element_text(color = "#276FBF"),
+    axis.ticks.y.left = element_line(color = "#276FBF"),
+    axis.title.y.right = element_text(color = "maroon"),
+    axis.text.y.right = element_text(color = "maroon"),
+    axis.ticks.y.right = element_line(color = "maroon")
+  )
+
+p1
+
+```
+
+### <span style="font-weight: bold; color: black;">H~2~O Mole Fraction Dynamics</span>
+
+```{r Example Station H2O Mole Fractions plot, fig.height=5, fig.width=7, dpi=600}
+
+p2 = ggplot(data = hf_day, aes(x = TIMESTAMP, y = H2O)) +
+  geom_scattermore(pointsize = 1) +
+  labs(title = "",
+       x = "",
+       y = "") +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_datetime(date_breaks = "1 hours", date_minor_breaks = "30 min", date_labels = "%H:%M")
+
+p2
+
+```
+
+## Row
+
+### <span style="font-weight: bold; color: black;">CH~4~ Wet and Dry Mole Fraction Dynamics</span>
+
+```{r Example Station CH4 Wet and Dry Mole Fractions, dpi=600}
+
+p3 = ggplot(data = hf_day, aes(x = TIMESTAMP)) +
+  geom_scattermore(aes(y = CH4_wet), pointsize = 1, color = "#276FBF") +
+  geom_scattermore(aes(y = CH4_dry), pointsize = 1, color = "maroon") +
+  scale_y_continuous(
+    name = expression(CH[4]~wet),
+    sec.axis = sec_axis(trans = ~ ., name = expression(CH[4]~dry))
+  ) +
+  scale_x_datetime(date_breaks = "1 hours", date_labels = "%H:%M") +
+  labs(title = NULL, x = NULL) +
+  theme_light() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title.y.left = element_text(color = "#276FBF"),
+    axis.text.y.left = element_text(color = "#276FBF"),
+    axis.ticks.y.left = element_line(color = "#276FBF"),
+    axis.title.y.right = element_text(color = "maroon"),
+    axis.text.y.right = element_text(color = "maroon"),
+    axis.ticks.y.right = element_line(color = "maroon")
+  )
+
+
+p3
+
+```
+
+### <span style="font-weight: bold; color: black;">N~2~O Wet and Dry Mole Fraction Dynamics</span>
+
+```{r Example Station N2O Wet and Dry Mole Fractions, dpi=600}
+
+p4 = ggplot(data = hf_day, aes(x = TIMESTAMP)) +
+  geom_scattermore(aes(y = N2O_wet), pointsize = 1, color = "#276FBF") +
+  geom_scattermore(aes(y = N2O_dry), pointsize = 1, color = "maroon") +
+  scale_y_continuous(
+    name = expression(N[2]*O~wet),
+    sec.axis = sec_axis(trans = ~ ., name = expression(N[2]*O~dry))
+  ) +
+  scale_x_datetime(date_breaks = "1 hours", date_labels = "%H:%M") +
+  labs(title = NULL, x = NULL) +
+  theme_light() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title.y.left = element_text(color = "#276FBF"),
+    axis.text.y.left = element_text(color = "#276FBF"),
+    axis.ticks.y.left = element_line(color = "#276FBF"),
+    axis.title.y.right = element_text(color = "maroon"),
+    axis.text.y.right = element_text(color = "maroon"),
+    axis.ticks.y.right = element_line(color = "maroon")
+  )
+
+p4
+
+```
+
+## Row
+
+### <span style="font-weight: bold; color: black;">Wind Speed X Dynamics</span>
+
+```{r Example Station wind speed X, fig.height=5, fig.width=7, dpi=600}
+
+p5 = ggplot(data = hf_day, aes(x = TIMESTAMP, y = WindSpeed_X)) +
+  geom_scattermore(pointsize = 1) +
+  labs(title = "",
+       x = "",
+       y = "") +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_datetime(date_breaks = "1 hours", date_minor_breaks = "30 min", date_labels = "%H:%M")
+
+p5
+
+```
+
+### <span style="font-weight: bold; color: black;">Wind Speed Y Dynamics</span>
+
+```{r Example Station wind speed Y, fig.height=5, fig.width=7, dpi=600}
+
+p6 = ggplot(data = hf_day, aes(x = TIMESTAMP, y = WindSpeed_Y)) +
+  geom_scattermore(pointsize = 1) +
+  labs(title = "",
+       x = "",
+       y = "") +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_datetime(date_breaks = "1 hours", date_minor_breaks = "30 min", date_labels = "%H:%M")
+
+p6
+
+```
+
+## Row
+
+### <span style="font-weight: bold; color: black;">Wind Speed Z Dynamics</span>
+
+```{r Example Station Wind Speed Z, fig.height=5, fig.width=7, dpi=600}
+
+p7 = ggplot(data = hf_day, aes(x = TIMESTAMP, y = WindSpeed_Z)) +
+  geom_scattermore(pointsize = 1) +
+  labs(title = "",
+       x = "",
+       y = "") +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_datetime(date_breaks = "1 hours", date_minor_breaks = "30 min", date_labels = "%H:%M")
+
+p7
+
+```
+
+### <span style="font-weight: bold; color: black;">Wind Temperature Dynamics</span>
+
+```{r Example Station Wind Temperature, fig.height=5, fig.width=7, dpi=600}
+
+p8 = ggplot(data = hf_day, aes(x = TIMESTAMP, y = Wind_Temp)) +
+  geom_scattermore(pointsize = 1) +
+  labs(title = "",
+       x = "",
+       y = "") +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_x_datetime(date_breaks = "1 hours", date_minor_breaks = "30 min", date_labels = "%H:%M")
+
+p8
+
+```
+
+```{r Example Station clean environment, include=FALSE}
+
+rm(list=ls())
+
+```
+
