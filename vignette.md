@@ -1,15 +1,3 @@
----
-title: "EddyEye Pulse: Dashboard Vignette"
-output: 
-  md_document:
-    variant: markdown_github
-    preserve_yaml: TRUE
----
-
-``` r
-knitr::opts_chunk$set(eval = FALSE)
-```
-
 # Introduction
 
 **EddyEye Pulse Dashboard** is an interactive dashboard designed for
