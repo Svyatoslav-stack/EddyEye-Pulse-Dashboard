@@ -1,0 +1,27 @@
+db:
+  driver: '{ODBC Driver X for SQL Server}'
+  server: YOUR_SERVER_IP_OR_NAME
+  database: YOUR_DATABASE
+  uid: YOUR_USERNAME
+  pwd: YOUR_PASSWORD
+  trust_cert: YOUR_TRUST_CERT
+tables:
+  hf: DB_SCHEMA.TABLE_HF
+  lf: DB_SCHEMA.TABLE_LF
+columns:
+  hf_pulse:
+  - TmStamp
+  - N2O_wet
+  - N2O_dry
+  - H2O
+  - CH4_wet
+  - CH4_dry
+  - CO2_wet
+  - CO2_dry
+  - WindSpeed_X
+  - WindSpeed_Y
+  - WindSpeed_Z
+  - Wind_Temp
+paths:
+  alarm_folder_general: your/path/to/alarm/general/
+  alarm_folder_oneobs: your/path/to/alarm/oneobs/

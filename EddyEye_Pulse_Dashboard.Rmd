@@ -34,7 +34,7 @@ library(yaml)
 
 # Example Station
 
-```{r Example Station HF data handling, include=FALSE}
+```{r Example Station HF data handling section, include=FALSE}
 
 cfg <- yaml::read_yaml("Your/path/to/file/config.yaml")
 db_cfg   <- cfg$db
@@ -156,7 +156,11 @@ process_alarm(
 
 ```
 
-```{r Example Station time parameters calculations, include=FALSE}
+## Row
+
+### <span style="font-weight: bold; color: black;">Time Parameters</span>
+
+```{r Example Station time parameters section, echo=FALSE}
 
 last_updated <- format(Sys.time(), "%d %B %Y, %H:%M")
 
@@ -173,14 +177,6 @@ if (nrow(hf_day) > 0) {
 } else {
   station_time <- NA
 }
-
-```
-
-## Row
-
-### <span style="font-weight: bold; color: black;">Time Parameters</span>
-
-```{r Example Station time parameters (visualisation), echo=FALSE}
 
 data <- data.frame(
   Parameter = c("Dashboard Refreshed", "Last Observation Time"),
