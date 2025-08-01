@@ -9,3 +9,7 @@ The dashboard is intended for practical, technical use, helping teams rapidly id
 **You can see a demo of the EddyEye Pulse Dashboard [here](https://svyatoslav-stack.github.io/EddyEye-Pulse-Dashboard/).**
 
 > **Friendly reminder**: If you plan to use or adapt this dashboard for your own purposes, please consider acknowledging the [author](https://orcid.org/0009-0004-7507-4933).
+
+**A detailed vignette is available:**
+If you want a step-by-step explanation of the dashboard’s structure and code, please see the [vignette](https://github.com/Svyatoslav-stack/EddyEye-Pulse-Dashboard/blob/main/vignette.md) included in this repository.
+The vignette walks you through each code chunk, explaining how the dashboard connects to your database, checks data quality, visualizes measurements, and sets up automated alerts. This is especially useful for anyone who wants to adapt or extend the dashboard for new stations or additional parameters.
